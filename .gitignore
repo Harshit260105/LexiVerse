@@ -1,0 +1,11 @@
+# Ignore large data files that are generated locally
+dataset_clean.txt
+data.json
+words_alpha.txt
+all-titles-in-ns0.txt
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore virtual environment folders
+venv/

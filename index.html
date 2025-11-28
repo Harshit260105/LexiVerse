@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LexiVerse Search</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(-45deg, #0f172a, #1e293b, #172554, #312e81);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+        }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(255, 255, 255, .3);
+            border-radius: 50%;
+            border-top-color: #34d399;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .search-result-item, .tag-cloud-container { animation: fadeIn 0.3s ease-out forwards; }
+        .glowing-focus:focus { box-shadow: 0 0 15px rgba(52, 211, 153, 0.5); }
+    </style>
+</head>
+<body class="text-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl mx-auto">
+        <h1 class="text-4xl md:text-5xl font-bold text-center text-white mb-2">LexiVerse</h1>
+        <p class="text-center text-gray-400 mb-8">Finding needles in a haystack, then sorting them by sharpness.</p>
+
+        <div class="relative">
+            <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" /></svg>
+            </div>
+            <input type="text" id="searchInput" placeholder="Search for words or phrases..."
+                   class="glowing-focus w-full bg-gray-800 border-2 border-gray-700 text-white placeholder-gray-500 text-lg rounded-xl shadow-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all duration-300 p-4 pl-12">
+            <div id="resultBadge" class="absolute top-1/2 right-4 -translate-y-1/2 bg-emerald-500 text-white text-xs font-bold px-2 py-1 rounded-full opacity-0 transition-opacity duration-300"></div>
+        </div>
+        
+        <div id="tagCloudContainer" class="tag-cloud-container my-4 text-center"></div>
+
+        <div id="resultsContainer" class="bg-gray-800/80 backdrop-blur-sm rounded-xl shadow-lg max-h-[60vh] overflow-y-auto">
+            <ul id="resultsList">
+                <li id="statusMessage" class="p-6 text-gray-500 text-center flex flex-col items-center justify-center">
+                    <div class="spinner mb-4"></div>
+                    <span>Loading dataset... Please wait.</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <footer class="text-center text-gray-600 mt-8">
+        <p>A DSA Project by a passionate developer.</p>
+    </footer>
+
+    <script>
+        // --- 1. DOM Element References & Global State ---
+        // Get references to all the HTML elements we'll need to interact with.
+        const searchInput = document.getElementById('searchInput');
+        const resultsList = document.getElementById('resultsList');
+        const statusMessage = document.getElementById('statusMessage');
+        const resultBadge = document.getElementById('resultBadge');
+        const tagCloudContainer = document.getElementById('tagCloudContainer');
+        
+        // Global variables to hold our dataset and manage application state.
+        let dataset = []; // This will hold all 1.5 million entries once loaded.
+        let debounceTimer; // Used to delay search until the user stops typing.
+        
+        // A palette of colors for dynamically styling the search result highlights.
+        const colorPalette = ['text-emerald-400', 'text-sky-400', 'text-violet-400', 'text-fuchsia-400', 'text-rose-400', 'text-amber-400'];
+        let currentHighlightColor = 'text-emerald-400';
+
+        // --- 2. Data Loading ---
+        /**
+         * Asynchronously fetches and loads the dataset from data.json.
+         * Using async/await prevents the UI from freezing while the large file is loaded.
+         */
+        async function loadDataset() {
+            try {
+                const response = await fetch('data.json');
+                if (!response.ok) throw new Error('Network response failed.');
+                dataset = await response.json();
+                statusMessage.innerHTML = 'Dataset loaded. Start typing to search.';
+            } catch (error) {
+                statusMessage.innerHTML = '<span class="text-red-500">Error: Could not load data.json.</span>';
+                console.error('Failed to load dataset:', error);
+            }
+        }
+
+        // --- 3. Event Listeners ---
+        /**
+         * Main event listener for the search input.
+         * It uses a debouncing technique to prevent firing a search on every single keystroke.
+         * The search only runs after the user has paused typing for 150ms.
+         */
+        searchInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer); // Clear the previous timer
+            debounceTimer = setTimeout(() => {
+                const query = searchInput.value.trim();
+                if (query.length > 0) {
+                    // Pick a new random color for this search session.
+                    currentHighlightColor = colorPalette[Math.floor(Math.random() * colorPalette.length)];
+                    const suggestions = getSuggestions(query, 100);
+                    displaySuggestions(suggestions, query);
+                    updateTagCloud(suggestions, query);
+                } else {
+                    // Reset the UI if the search box is cleared.
+                    resultsList.innerHTML = `<li class="p-4 text-gray-500 text-center">Type to search...</li>`;
+                    resultBadge.style.opacity = '0';
+                    tagCloudContainer.innerHTML = '';
+                }
+            }, 150); // 150ms delay
+        });
+
+        /**
+         * Event listener for handling keyboard navigation (Arrow Keys and Enter).
+         * This provides a professional, accessible user experience.
+         */
+        searchInput.addEventListener('keydown', (e) => {
+            const items = resultsList.querySelectorAll('li.search-result-item');
+            if (items.length === 0) return;
+
+            // Find the currently selected item, if any.
+            let currentSelection = -1;
+            items.forEach((item, index) => {
+                if (item.classList.contains('bg-gray-700')) {
+                    currentSelection = index;
+                }
+            });
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault(); // Prevent cursor from moving in the input box.
+                if (currentSelection > -1) items[currentSelection].classList.remove('bg-gray-700');
+                const nextSelection = Math.min(currentSelection + 1, items.length - 1);
+                items[nextSelection].classList.add('bg-gray-700');
+                items[nextSelection].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (currentSelection > -1) items[currentSelection].classList.remove('bg-gray-700');
+                const nextSelection = Math.max(currentSelection - 1, 0);
+                items[nextSelection].classList.add('bg-gray-700');
+                items[nextSelection].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (currentSelection > -1) {
+                    items[currentSelection].click(); // Simulate a click to select.
+                }
+            }
+        });
+
+        // --- 4. Core Search & Sort Logic ---
+        /**
+         * Finds and sorts suggestions from the dataset based on the user's query.
+         * @param {string} query - The user's search term.
+         * @param {number} limit - The maximum number of suggestions to return.
+         * @returns {string[]} A sorted array of suggestions.
+         */
+        function getSuggestions(query, limit) {
+            const lowerCaseQuery = query.toLowerCase();
+            const queryParts = lowerCaseQuery.split(' ').filter(p => p); // For multi-word search
+            
+            // Stage 1: Linear Search (O(n))
+            // Iterate through the dataset array to find all matching entries.
+            const results = [];
+            for (const item of dataset) {
+                const lowerCaseItem = item.toLowerCase();
+                // For multi-word queries, ensure ALL parts are included in the item.
+                if (queryParts.every(part => lowerCaseItem.includes(part))) {
+                    results.push(item);
+                }
+            }
+            
+            // Stage 2: The Custom Relevance Sort Algorithm
+            // This is a custom comparison sort that ranks results by a calculated score.
+            results.sort((a, b) => {
+                const aLower = a.toLowerCase();
+                const bLower = b.toLowerCase();
+                let aScore = 0;
+                let bScore = 0;
+
+                // Priority 1: Give a large bonus if the item starts with the query.
+                if (aLower.startsWith(lowerCaseQuery)) aScore += 10;
+                if (bLower.startsWith(lowerCaseQuery)) bScore += 10;
+
+                // Priority 2: Give a smaller bonus for an exact word match.
+                const regex = new RegExp(`\\b${lowerCaseQuery}\\b`);
+                if (regex.test(aLower)) aScore += 5;
+                if (regex.test(bLower)) bScore += 5;
+
+                // Priority 3: Apply a small penalty based on length (shorter is better).
+                aScore -= Math.abs(aLower.length - lowerCaseQuery.length) * 0.1;
+                bScore -= Math.abs(bLower.length - lowerCaseQuery.length) * 0.1;
+
+                // Sort by score (descending). If scores are equal, use length as a tie-breaker.
+                if (aScore !== bScore) return bScore - aScore;
+                return a.length - b.length;
+            });
+
+            return results.slice(0, limit);
+        }
+
+        // --- 5. Advanced Features ---
+        /**
+         * Analyzes search results to generate a "Related Terms" tag cloud.
+         * @param {string[]} suggestions - The array of sorted search results.
+         * @param {string} query - The original user query.
+         */
+        function updateTagCloud(suggestions, query) {
+            // Core DSA Concept: Use a Map (Hash Map) for efficient frequency counting (O(1) average time).
+            const wordFrequencies = new Map();
+            const queryWords = new Set(query.toLowerCase().split(' ').filter(p => p));
+
+            // Iterate through suggestions to count the frequency of each word.
+            for (const suggestion of suggestions) {
+                const words = suggestion.split(' ');
+                for (const word of words) {
+                    const cleanWord = word.toLowerCase().replace(/[^a-z]/g, '');
+                    // Ignore the query words themselves and very short words.
+                    if (cleanWord && cleanWord.length > 2 && !queryWords.has(cleanWord)) {
+                        wordFrequencies.set(cleanWord, (wordFrequencies.get(cleanWord) || 0) + 1);
+                    }
+                }
+            }
+
+            // Sort the words by frequency to find the most common related terms.
+            const sortedWords = Array.from(wordFrequencies.entries()).sort((a, b) => b[1] - a[1]);
+            
+            // Dynamically create and display the top 5 related term tags.
+            tagCloudContainer.innerHTML = '';
+            if (sortedWords.length > 0) {
+                const title = document.createElement('h3');
+                title.className = 'text-sm font-bold text-gray-400 mb-2';
+                title.textContent = 'Related Terms';
+                tagCloudContainer.appendChild(title);
+
+                const tagContainer = document.createElement('div');
+                tagContainer.className = 'flex flex-wrap justify-center gap-2';
+                tagCloudContainer.appendChild(tagContainer);
+
+                sortedWords.slice(0, 5).forEach(([word, freq]) => {
+                    const tag = document.createElement('span');
+                    tag.className = 'bg-gray-700 text-gray-300 text-xs font-semibold px-2.5 py-1 rounded-full cursor-pointer hover:bg-gray-600';
+                    tag.textContent = word.charAt(0).toUpperCase() + word.slice(1);
+                    // Make the tag clickable to trigger a new search.
+                    tag.onclick = () => { searchInput.value = word; searchInput.dispatchEvent(new Event('input')); };
+                    tagContainer.appendChild(tag);
+                });
+            }
+        }
+
+        // --- 6. UI Rendering ---
+        /**
+         * Renders the list of suggestions in the UI.
+         * @param {string[]} suggestions - The sorted array of suggestions to display.
+         * @param {string} query - The original user query, used for highlighting.
+         */
+        function displaySuggestions(suggestions, query) {
+            resultsList.innerHTML = ''; // Clear previous results.
+            
+            // Update and show the result count badge.
+            resultBadge.textContent = suggestions.length;
+            resultBadge.style.opacity = '1';
+
+            if (suggestions.length === 0) {
+                resultsList.innerHTML = `<li class="p-6 text-gray-500 text-center">No results found for "<span class="font-semibold text-gray-400">${query}</span>"</li>`;
+                return;
+            }
+
+            // Create a regular expression to highlight all parts of the query.
+            const queryParts = query.trim().split(' ').filter(p => p);
+            const queryRegex = new RegExp(`(${queryParts.join('|')})`, 'gi');
+
+            // Create and append a list item for each suggestion.
+            suggestions.forEach(suggestion => {
+                const li = document.createElement('li');
+                li.className = 'search-result-item p-4 border-b border-gray-700 cursor-pointer transition-colors duration-200';
+                // Use the regex to wrap matched parts in a <strong> tag with the dynamic color.
+                li.innerHTML = suggestion.replace(queryRegex, `<strong class="font-bold ${currentHighlightColor}">$1</strong>`);
+                li.addEventListener('click', () => {
+                    searchInput.value = suggestion;
+                    resultsList.innerHTML = '';
+                    resultBadge.style.opacity = '0';
+                    tagCloudContainer.innerHTML = '';
+                });
+                resultsList.appendChild(li);
+            });
+        }
+
+        // --- 7. Initial Application Load ---
+        // Add an event listener to start loading the dataset as soon as the page structure is ready.
+        document.addEventListener('DOMContentLoaded', loadDataset);
+    </script>
+
+</body>
+</html>
